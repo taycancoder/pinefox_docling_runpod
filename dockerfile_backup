@@ -1,0 +1,49 @@
+# Usamos una imagen de CUDA 12.2 que es muy estable con la arquitectura Ada Lovelace (4090)
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+# Evita interacciones durante la instalación
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Instalar Python 3.11 y todas las librerías de sistema para PDF y Vision [cite: 1, 2]
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    python3.11-distutils \
+    curl \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libmagic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configurar Python 3.11 como predeterminado [cite: 2]
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Instalar pip de forma limpia [cite: 2]
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+
+# Instalar PyTorch con soporte CUDA 12.1 explícito 
+# Esto es vital para que la 4090 sea detectada correctamente
+RUN python -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Copiar y cargar dependencias 
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+# Pre-descarga de modelos para evitar delays en el primer job
+# Esto carga TableFormer y los modelos de Layout en el build
+RUN python -c "from docling.document_converter import DocumentConverter; DocumentConverter()"
+
+COPY rp_handler.py .
+
+# Ejecución en modo unbuffered para ver logs en tiempo real en RunPod [cite: 4]
+CMD ["python", "-u", "rp_handler.py"]

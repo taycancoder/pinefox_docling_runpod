@@ -1,0 +1,156 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║          PARÁMETROS CONFIGURABLES — RunPod Docling PDF Handler             ║
+║          Todos son opcionales. Si no se envían, se usa el DEFAULT.         ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Cómo usarlos: añádelos en el objeto "input" del job de RunPod junto a pdf_url o pdf_base64.
+
+Ejemplo de payload completo:
+{
+  "input": {
+    "pdf_url":    "https://example.com/report.pdf",
+    "fileName":   "annual_report_2024.pdf",
+    "num_threads": 16,
+    "table_mode":  "accurate"
+  }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PARÁMETROS OBLIGATORIOS (uno de los dos)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pdf_url         string    URL pública del PDF a descargar
+                            Ejemplo: "https://sec.gov/filing/report.pdf"
+
+  pdf_base64      string    PDF codificado en Base64
+                            Usar cuando no hay URL pública disponible
+
+  fileName        string    Nombre identificador en la respuesta
+                            Default: "archivo_desconocido"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  RENDIMIENTO Y HARDWARE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  num_threads     int       Hilos CPU para preprocesamiento del pipeline
+                            Default:  8
+                            Valores:  1 – 32 (recomendado: nº de vCPUs disponibles)
+                            Nota:     No afecta al cálculo GPU, solo CPU workers
+
+  force_backend   string    Forzar un backend específico, saltando la cascada
+                            Default:  null (usa cascada automática)
+                            Valores:
+                              "cuda_accurate"  → DoclingParse + CUDA + ACCURATE
+                              "cuda_fast"      → DoclingParse   + CUDA + FAST
+                              "cpu_fallback"   → PyPdfium2   + CPU  (+ OCR si do_ocr=true)
+                            Cuándo usarlo: benchmarks, debugging, PDFs simples de texto
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CALIDAD DE EXTRACCIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  table_mode      string    Modo del modelo TableFormer para extracción de tablas
+                            Default:  "accurate"
+                            Valores:
+                              "accurate"  → Máxima calidad, detecta celdas fusionadas,
+                                            headers multi-fila. Ideal para balance sheets,
+                                            income statements, tablas SEC complejas.
+                                            ~2-3x más lento que fast.
+                              "fast"      → Tablas simples, sin merge de celdas.
+                                            Útil para PDFs de texto con tablas básicas
+                                            o cuando la velocidad es crítica.
+
+  do_table_structure  bool  Activar extracción y reconstrucción de tablas
+                            Default:  true
+                            Valores:  true | false
+                            Nota:     Poner false solo si el PDF no tiene tablas
+                                      y quieres máxima velocidad
+
+  do_cell_matching    bool  Fusionar y alinear celdas en tablas (requiere do_table_structure=true)
+                            Default:  true
+                            Valores:  true | false
+                            Nota:     Crítico para tablas financieras con celdas span.
+                                      Desactivar solo para PDFs simples/velocidad máxima
+
+  do_ocr          bool      Activar OCR para PDFs escaneados o con texto como imagen
+                            Default:  false
+                            Valores:  true | false
+                            Cuándo activar:
+                              - PDFs escaneados que pasaron el filtro de texto por error
+                              - Filings SEC muy antiguos (pre-2000) digitalizados
+                              - PDFs con texto embebido como imagen
+                            Nota:     Añade ~3-5x de latencia. Innecesario si
+                                      todos los PDFs tienen texto digital.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TIMEOUTS (segundos)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  timeout_cuda_accurate   int   Tiempo máximo para backend cuda_accurate
+                                Default:  800  (13 min)
+                                Rango:    60 – 1800
+                                Nota:     PDFs de 400+ páginas pueden necesitar más
+
+  timeout_cuda_fast       int   Tiempo máximo para backend cuda_fast
+                                Default:  400  (6.6 min)
+                                Rango:    60 – 1200
+
+  timeout_cpu_fallback    int   Tiempo máximo para backend cpu_fallback
+                                Default:  900  (15 min)
+                                Rango:    60 – 3600
+                                Nota:     CPU es más lento; aumentar para PDFs grandes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VALIDACIÓN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  max_file_size_mb    int   Tamaño máximo del PDF en MB antes de rechazarlo
+                            Default:  500
+                            Rango:    10 – 2000
+                            Nota:     PDFs SEC típicos: 1-50MB. Informes anuales: 5-100MB
+
+  min_markdown_chars  int   Mínimo de caracteres en el markdown resultante
+                            para considerar la conversión exitosa
+                            Default:  100
+                            Rango:    50 – 10000
+                            Nota:     Si el resultado tiene menos chars, se considera
+                                      fallo y pasa al siguiente backend de la cascada
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PARÁMETROS IGNORADOS (internos, no configurables por diseño)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  generate_page_images    Siempre false  — no se necesitan imágenes de páginas
+  generate_pic_images     Siempre false  — no se necesitan imágenes de figuras
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  RESPUESTA — campos en el output
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  status              "success" | "error"
+  fileName            Nombre enviado en el input
+  backend_used        Qué backend procesó finalmente el PDF
+  file_size_mb        Tamaño del PDF descargado
+  markdown_length     Número de caracteres del markdown generado
+  config_used         Configuración efectiva aplicada (con defaults resueltos)
+  markdown            Contenido extraído en formato Markdown
+  errors_log          (solo en error) Lista de fallos por backend con tipo de error
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  EJEMPLOS DE USO FRECUENTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  // Informe anual estándar (defaults óptimos, no hay que enviar nada extra)
+  { "pdf_url": "...", "fileName": "annual_2024.pdf" }
+
+  // PDF grande de 300+ páginas — aumentar timeouts
+  { "pdf_url": "...", "timeout_cuda_accurate": 1200, "timeout_cpu_fallback": 1800 }
+
+  // PDF simple de solo texto, sin tablas — máxima velocidad
+  { "pdf_url": "...", "table_mode": "fast", "do_cell_matching": false, "force_backend": "cuda_fast" }
+
+  // PDF escaneado que escapó al filtro
+  { "pdf_url": "...", "do_ocr": true, "force_backend": "cpu_fallback", "timeout_cpu_fallback": 1200 }
+
+  // Servidor con 32 vCPUs disponibles
+  { "pdf_url": "...", "num_threads": 24 }

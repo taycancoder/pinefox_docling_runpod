@@ -1,0 +1,116 @@
+import runpod
+from pathlib import Path
+import base64
+import tempfile
+import requests
+import concurrent.futures
+import torch # Importación temprana para estabilizar CUDA
+
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+from docling.datamodel.base_models import InputFormat
+from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
+from docling.datamodel.pipeline_options import AcceleratorDevice, AcceleratorOptions
+
+# --- CONFIGURACIÓN DE ALTO RENDIMIENTO ---
+_pipeline_options = PdfPipelineOptions()
+_pipeline_options.do_ocr = False
+_pipeline_options.generate_page_images = False
+_pipeline_options.generate_picture_images = False
+_pipeline_options.do_table_structure = True
+_pipeline_options.table_structure_options.mode = TableFormerMode.FAST 
+
+# Optimizado para 4090: 16 hilos para pre-procesamiento y dispositivo CUDA forzado
+_pipeline_options.accelerator_options = AcceleratorOptions(
+    num_threads=8, 
+    device=AcceleratorDevice.CUDA 
+)
+
+# Inicialización de convertidores (ambos usan CUDA)
+# 1. Fast: DoclingParse (Extremadamente rápido)
+_converter_fast = DocumentConverter(
+    format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options, backend=DoclingParseDocumentBackend)}
+)
+# 2. Stable: PyPdfium2 (Más robusto con PDFs complejos)
+_converter_safe = DocumentConverter(
+    format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options, backend=PyPdfiumDocumentBackend)}
+)
+
+def _run_conversion(converter, path_str):
+    """Ejecuta la conversión. Si falla aquí, se lanza la excepción para el retry."""
+    # raises_on_error=True asegura que podamos capturar fallos y saltar al siguiente backend
+    result = converter.convert(path_str, raises_on_error=True)
+    return result.document.export_to_markdown()
+
+def categorize_error(error_obj):
+    err_str = str(error_obj).lower()
+    if "cuda out of memory" in err_str: return "CUDA_OOM"
+    if "timeout" in err_str: return "TIMEOUT"
+    if "pdfium" in err_str or "format" in err_str: return "PDF_CORRUPT"
+    return "CONVERSION_ERROR"
+
+def handler(job):
+    job_input = job.get('input', {})
+    pdf_url = job_input.get('pdf_url')
+    pdf_base64 = job_input.get('pdf_base64')
+    file_name = job_input.get('fileName', 'archivo_desconocido')
+    
+    # Timeout ajustado para 400 páginas (600s = 10 min por intento)
+    try:
+        custom_timeout = int(job_input.get('timeout', 600))
+    except:
+        custom_timeout = 600
+
+    if not pdf_url and not pdf_base64:
+        return {"error": "Falta pdf_url o pdf_base64", "fileName": file_name, "error_type": "VALIDATION_ERROR"}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pdf_path = Path(tmpdir) / "document.pdf"
+        
+        try:
+            # Descarga de archivo
+            if pdf_url:
+                response = requests.get(pdf_url, stream=True, timeout=(15, 300))
+                response.raise_for_status()
+                with open(pdf_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192): f.write(chunk)
+            else:
+                with open(pdf_path, "wb") as f: f.write(base64.b64decode(pdf_base64))
+            
+            # --- ESTRATEGIA DE CASCADA CUDA ---
+            # Intentamos primero con el backend más rápido, si falla, pasamos al más estable.
+            backends = [
+                {"name": "fast_cuda", "converter": _converter_fast},
+                {"name": "stable_cuda", "converter": _converter_safe}
+            ]
+            
+            last_exception = None
+            for backend in backends:
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(_run_conversion, backend["converter"], str(pdf_path))
+                        markdown_text = future.result(timeout=custom_timeout)
+                        
+                        # Si tiene éxito, devolvemos inmediatamente
+                        return {
+                            "status": "success",
+                            "fileName": file_name,
+                            "backend_used": backend["name"],
+                            "markdown": markdown_text
+                        }
+                except Exception as e:
+                    last_exception = e
+                    continue # Salta al siguiente backend (stable_cuda)
+
+            # Si llegamos aquí, ambos fallaron
+            return {
+                "error": f"Fallo en todos los backends CUDA: {str(last_exception)}",
+                "error_type": categorize_error(last_exception),
+                "fileName": file_name
+            }
+            
+        except Exception as e:
+            return {"error": str(e), "error_type": "SYSTEM_ERROR", "fileName": file_name}
+
+runpod.serverless.start({"handler": handler})

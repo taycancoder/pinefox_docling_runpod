@@ -1,0 +1,4 @@
+docling>=2.7.0,<3.0.0
+runpod>=1.6.2
+requests>=2.31.0
+pypdfium2>=4.0.0
